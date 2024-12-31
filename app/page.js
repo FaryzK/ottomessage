@@ -12,7 +12,28 @@ export default function Home() {
   const signInWithGoogle = async () => {
     try {
       const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
+      const result = await signInWithPopup(auth, provider);
+      const user = result.user;
+
+      // Save user to MongoDB
+      const token = await user.getIdToken();
+      const response = await fetch('/api/auth/user', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: user.displayName,
+          email: user.email,
+          image: user.photoURL
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save user data');
+      }
+
       router.push('/schedules');
     } catch (error) {
       console.error('Error signing in with Google:', error);
