@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 
 export default function Home() {
-  const [status, setStatus] = useState('checking');
+  const [status, setStatus] = useState('disconnected');
   const [qrCode, setQrCode] = useState(null);
   const [message, setMessage] = useState('');
   const [groupName, setGroupName] = useState('Test Restaurant x Supplier');
@@ -18,9 +18,24 @@ export default function Home() {
       setStatus(data.status);
     } catch (error) {
       console.error('Error connecting to WhatsApp:', error);
-      setStatus('disconnected');
     }
   };
+
+  useEffect(() => {
+    const checkStatus = async () => {
+      try {
+        const response = await fetch('/api/whatsapp');
+        const data = await response.json();
+        setStatus(data.status);
+        setQrCode(data.qrCode);
+      } catch (error) {
+        console.error('Error checking status:', error);
+      }
+    };
+
+    const interval = setInterval(checkStatus, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const sendMessage = async () => {
     if (!message.trim() || !groupName.trim()) return;
@@ -52,47 +67,7 @@ export default function Home() {
     }
   };
 
-  // Initial connection and status check
-  useEffect(() => {
-    const initializeWhatsApp = async () => {
-      try {
-        // First check current status
-        const statusResponse = await fetch('/api/whatsapp');
-        const statusData = await statusResponse.json();
-        
-        // If not connected, try to connect
-        if (statusData.status === 'disconnected') {
-          await connectWhatsApp();
-        } else {
-          setStatus(statusData.status);
-          setQrCode(statusData.qrCode);
-        }
-
-        // Start polling for status updates
-        const interval = setInterval(async () => {
-          const response = await fetch('/api/whatsapp');
-          const data = await response.json();
-          setStatus(data.status);
-          setQrCode(data.qrCode);
-        }, 1000);
-
-        return () => clearInterval(interval);
-      } catch (error) {
-        console.error('Error initializing WhatsApp:', error);
-        setStatus('disconnected');
-      }
-    };
-
-    initializeWhatsApp();
-  }, []);
-
   const isConnectedAndReady = status === 'successChat' || status === 'isLogged';
-
-  if (status === 'checking') {
-    return <div className="min-h-screen p-8 flex items-center justify-center">
-      <p>Initializing WhatsApp...</p>
-    </div>;
-  }
 
   return (
     <main className="min-h-screen p-8">
@@ -103,6 +78,17 @@ export default function Home() {
           <p className="text-center mb-4">
             Status: <span className="font-semibold">{status}</span>
           </p>
+
+          {status === 'disconnected' && (
+            <div className="flex justify-center">
+              <button
+                onClick={connectWhatsApp}
+                className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600"
+              >
+                Connect to WhatsApp
+              </button>
+            </div>
+          )}
 
           {qrCode && !isConnectedAndReady && (
             <div className="mt-4">
