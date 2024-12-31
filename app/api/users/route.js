@@ -1,26 +1,37 @@
 import { NextResponse } from 'next/server';
-import { connectDB } from '@/lib/mongodb/connect';
+import connectDB from '@/lib/mongodb/connect';
 import User from '@/models/User';
 
 export async function POST(request) {
   try {
     await connectDB();
-    
+
     const { firebaseId, name, image } = await request.json();
 
-    if (!firebaseId || !name) {
+    if (!firebaseId) {
       return NextResponse.json(
-        { error: 'Firebase ID and name are required' },
+        { error: 'Firebase ID is required' },
         { status: 400 }
       );
     }
 
-    // Update user if exists, create if doesn't exist
-    const user = await User.findOneAndUpdate(
-      { firebaseId },
-      { name, image },
-      { new: true, upsert: true }
-    );
+    // Find user by firebaseId or create new one
+    let user = await User.findOne({ firebaseId });
+
+    if (!user) {
+      user = await User.create({
+        firebaseId,
+        name,
+        image
+      });
+    } else {
+      // Update user info if it has changed
+      if (name !== user.name || image !== user.image) {
+        user.name = name;
+        user.image = image;
+        await user.save();
+      }
+    }
 
     return NextResponse.json(user);
   } catch (error) {
