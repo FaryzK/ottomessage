@@ -3,9 +3,10 @@
 import { useState, useEffect } from 'react';
 
 export default function Home() {
-  const [status, setStatus] = useState('disconnected');
+  const [status, setStatus] = useState('checking');
   const [qrCode, setQrCode] = useState(null);
   const [message, setMessage] = useState('');
+  const [groupName, setGroupName] = useState('Test Restaurant x Supplier');
   const [sendStatus, setSendStatus] = useState('');
 
   const connectWhatsApp = async () => {
@@ -17,11 +18,12 @@ export default function Home() {
       setStatus(data.status);
     } catch (error) {
       console.error('Error connecting to WhatsApp:', error);
+      setStatus('disconnected');
     }
   };
 
   const sendMessage = async () => {
-    if (!message.trim()) return;
+    if (!message.trim() || !groupName.trim()) return;
     
     try {
       setSendStatus('sending...');
@@ -30,7 +32,10 @@ export default function Home() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ 
+          message,
+          groupName 
+        }),
       });
       const data = await response.json();
       
@@ -47,23 +52,47 @@ export default function Home() {
     }
   };
 
+  // Initial connection and status check
   useEffect(() => {
-    const checkStatus = async () => {
+    const initializeWhatsApp = async () => {
       try {
-        const response = await fetch('/api/whatsapp');
-        const data = await response.json();
-        setStatus(data.status);
-        setQrCode(data.qrCode);
+        // First check current status
+        const statusResponse = await fetch('/api/whatsapp');
+        const statusData = await statusResponse.json();
+        
+        // If not connected, try to connect
+        if (statusData.status === 'disconnected') {
+          await connectWhatsApp();
+        } else {
+          setStatus(statusData.status);
+          setQrCode(statusData.qrCode);
+        }
+
+        // Start polling for status updates
+        const interval = setInterval(async () => {
+          const response = await fetch('/api/whatsapp');
+          const data = await response.json();
+          setStatus(data.status);
+          setQrCode(data.qrCode);
+        }, 1000);
+
+        return () => clearInterval(interval);
       } catch (error) {
-        console.error('Error checking status:', error);
+        console.error('Error initializing WhatsApp:', error);
+        setStatus('disconnected');
       }
     };
 
-    const interval = setInterval(checkStatus, 1000);
-    return () => clearInterval(interval);
+    initializeWhatsApp();
   }, []);
 
-  console.log(status);
+  const isConnectedAndReady = status === 'successChat' || status === 'isLogged';
+
+  if (status === 'checking') {
+    return <div className="min-h-screen p-8 flex items-center justify-center">
+      <p>Initializing WhatsApp...</p>
+    </div>;
+  }
 
   return (
     <main className="min-h-screen p-8">
@@ -74,43 +103,50 @@ export default function Home() {
           <p className="text-center mb-4">
             Status: <span className="font-semibold">{status}</span>
           </p>
-          
-          {status === 'disconnected' && (
-            <button
-              onClick={connectWhatsApp}
-              className="w-full py-2 px-4 bg-green-500 text-white rounded-lg hover:bg-green-600"
-            >
-              Connect WhatsApp
-            </button>
-          )}
 
-          {qrCode && (
+          {qrCode && !isConnectedAndReady && (
             <div className="mt-4">
               <p className="text-center mb-2">Scan this QR code with WhatsApp</p>
               <img 
-                src={qrCode} 
+                src={qrCode}
                 alt="WhatsApp QR Code" 
                 className="mx-auto"
+                style={{ maxWidth: '100%', height: 'auto' }}
               />
             </div>
           )}
 
-          {status === 'successChat' && (
+          {isConnectedAndReady && (
             <div className="mt-6 space-y-4">
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={message}
-                  onChange={(e) => setMessage(e.target.value)}
-                  placeholder="Type your message..."
-                  className="flex-1 px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                />
-                <button
-                  onClick={sendMessage}
-                  className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600"
-                >
-                  Send
-                </button>
+              <div className="space-y-4">
+                <div>
+                  <label htmlFor="groupName" className="block text-sm font-medium text-gray-700 mb-1">
+                    Group Name
+                  </label>
+                  <input
+                    id="groupName"
+                    type="text"
+                    value={groupName}
+                    onChange={(e) => setGroupName(e.target.value)}
+                    placeholder="Enter group name..."
+                    className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
+                    placeholder="Type your message..."
+                    className="flex-1 px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                  />
+                  <button
+                    onClick={sendMessage}
+                    className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600"
+                  >
+                    Send
+                  </button>
+                </div>
               </div>
               {sendStatus && (
                 <p className={`text-center text-sm ${

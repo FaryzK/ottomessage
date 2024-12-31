@@ -59,7 +59,6 @@ export async function GET() {
 }
 
 export async function POST(request) {
-  // If there's a request body, it's a message sending request
   try {
     const body = await request.json();
     
@@ -71,15 +70,21 @@ export async function POST(request) {
         }, { status: 400 });
       }
 
+      if (!body.groupName) {
+        return NextResponse.json({ 
+          status: 'error',
+          message: 'Group name is required'
+        }, { status: 400 });
+      }
+
       try {
-        // Try to find group by name first
-        const groupName = "Test Restaurant x Supplier";
-        const group = await findGroupByName(client, groupName);
+        // Use group name from request
+        const group = await findGroupByName(client, body.groupName);
         
         if (!group) {
           return NextResponse.json({ 
             status: 'error',
-            message: 'Group not found by name. Please check console logs for available chats.'
+            message: `Group "${body.groupName}" not found. Please check console logs for available chats.`
           }, { status: 404 });
         }
 
@@ -106,7 +111,7 @@ export async function POST(request) {
       }
     }
   } catch (error) {
-    // If there's no request body or parsing fails, treat it as a connection request
+    // If there's no JSON body, treat it as a connection request
     if (client) {
       return NextResponse.json({ 
         status: 'already_connected',
