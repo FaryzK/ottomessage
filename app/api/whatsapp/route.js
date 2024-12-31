@@ -1,9 +1,32 @@
 import { create } from 'venom-bot';
 import { NextResponse } from 'next/server';
+import { auth as adminAuth } from 'firebase-admin';
+import { initAdmin } from '@/firebase/admin';
 
-let client = null;
-let qrCode = null;
-let connectionStatus = 'disconnected';
+// Initialize Firebase Admin if not already initialized
+initAdmin();
+
+// Store client instances for each user
+const clients = new Map();
+const qrCodes = new Map();
+const connectionStatuses = new Map();
+
+// Verify Firebase token middleware
+async function verifyToken(request) {
+  try {
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return null;
+    }
+
+    const token = authHeader.split('Bearer ')[1];
+    const decodedToken = await adminAuth().verifyIdToken(token);
+    return decodedToken.uid;
+  } catch (error) {
+    console.error('Error verifying token:', error);
+    return null;
+  }
+}
 
 async function findGroupByName(client, name) {
   try {
@@ -21,9 +44,7 @@ async function findGroupByName(client, name) {
       });
     });
     
-    // Try different ways to find the group
     const group = chats?.find(chat => {
-      // Check various possible name locations
       const chatName = chat.name || 
                       chat.contact?.name || 
                       chat.groupMetadata?.subject;
@@ -51,68 +72,46 @@ async function findGroupByName(client, name) {
   }
 }
 
-export async function GET() {
+export async function GET(request) {
+  const uid = await verifyToken(request);
+  if (!uid) {
+    return NextResponse.json({ 
+      status: 'error',
+      message: 'Unauthorized'
+    }, { status: 401 });
+  }
+
   return NextResponse.json({ 
-    status: connectionStatus,
-    qrCode
+    status: connectionStatuses.get(uid) || 'disconnected',
+    qrCode: qrCodes.get(uid)
   });
 }
 
 export async function POST(request) {
+  const uid = await verifyToken(request);
+  if (!uid) {
+    return NextResponse.json({ 
+      status: 'error',
+      message: 'Unauthorized'
+    }, { status: 401 });
+  }
+
+  // Check if there's a request body
+  let body = null;
   try {
-    const body = await request.json();
-    
-    if (body.message) {
-      if (!client) {
-        return NextResponse.json({ 
-          status: 'error',
-          message: 'WhatsApp is not connected'
-        }, { status: 400 });
-      }
-
-      if (!body.groupName) {
-        return NextResponse.json({ 
-          status: 'error',
-          message: 'Group name is required'
-        }, { status: 400 });
-      }
-
-      try {
-        // Use group name from request
-        const group = await findGroupByName(client, body.groupName);
-        
-        if (!group) {
-          return NextResponse.json({ 
-            status: 'error',
-            message: `Group "${body.groupName}" not found. Please check console logs for available chats.`
-          }, { status: 404 });
-        }
-
-        // Get the correct group ID format
-        const groupId = group.id?._serialized || 
-                       group.id || 
-                       (group.groupMetadata && group.groupMetadata.id);
-
-        console.log('Attempting to send message to group ID:', groupId);
-
-        // Send message to the group
-        const result = await client.sendText(groupId, body.message);
-        console.log('Message sent result:', result);
-        return NextResponse.json({ 
-          status: 'success',
-          message: 'Message sent successfully'
-        });
-      } catch (error) {
-        console.error('Failed to send message:', error);
-        return NextResponse.json({ 
-          status: 'error',
-          message: 'Failed to send message: ' + error.message
-        }, { status: 500 });
-      }
+    const contentType = request.headers.get('content-type');
+    if (contentType?.includes('application/json')) {
+      body = await request.json();
     }
   } catch (error) {
-    // If there's no JSON body, treat it as a connection request
-    if (client) {
+    // If JSON parsing fails, assume it's a connection request
+    body = null;
+  }
+
+  // If there's no body or no message, treat it as a connection request
+  if (!body || !body.message) {
+    // Handle WhatsApp connection
+    if (clients.get(uid)) {
       return NextResponse.json({ 
         status: 'already_connected',
         message: 'WhatsApp is already connected'
@@ -120,28 +119,77 @@ export async function POST(request) {
     }
 
     try {
-      client = await create({
-        session: 'whatsapp-bot',
+      const client = await create({
+        session: `whatsapp-bot-${uid}`,
         headless: 'new',
         disableWelcome: true,
         disableSpins: true,
       }, 
-      (base64Qr, asciiQR) => {
-        qrCode = base64Qr;
+      (base64Qr) => {
+        qrCodes.set(uid, base64Qr);
       },
       (statusSession) => {
-        connectionStatus = statusSession;
+        connectionStatuses.set(uid, statusSession);
       });
+
+      clients.set(uid, client);
 
       return NextResponse.json({ 
         status: 'initializing',
         message: 'WhatsApp connection is being initialized'
       });
     } catch (error) {
+      console.error('Error creating WhatsApp client:', error);
       return NextResponse.json({ 
         status: 'error',
         message: error.message 
       }, { status: 500 });
     }
+  }
+
+  // Handle message sending
+  const client = clients.get(uid);
+  if (!client) {
+    return NextResponse.json({ 
+      status: 'error',
+      message: 'WhatsApp is not connected'
+    }, { status: 400 });
+  }
+
+  if (!body.groupName) {
+    return NextResponse.json({ 
+      status: 'error',
+      message: 'Group name is required'
+    }, { status: 400 });
+  }
+
+  try {
+    const group = await findGroupByName(client, body.groupName);
+    
+    if (!group) {
+      return NextResponse.json({ 
+        status: 'error',
+        message: `Group "${body.groupName}" not found. Please check console logs for available chats.`
+      }, { status: 404 });
+    }
+
+    const groupId = group.id?._serialized || 
+                   group.id || 
+                   (group.groupMetadata && group.groupMetadata.id);
+
+    console.log('Attempting to send message to group ID:', groupId);
+
+    const result = await client.sendText(groupId, body.message);
+    console.log('Message sent result:', result);
+    return NextResponse.json({ 
+      status: 'success',
+      message: 'Message sent successfully'
+    });
+  } catch (error) {
+    console.error('Failed to send message:', error);
+    return NextResponse.json({ 
+      status: 'error',
+      message: 'Failed to send message: ' + error.message
+    }, { status: 500 });
   }
 } 
